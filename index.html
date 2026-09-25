@@ -522,12 +522,57 @@ function restoreToken() {
   } catch (e) {}
   return false;
 }
-if (restoreToken()) {
-  document.addEventListener('DOMContentLoaded', () => {
-    showScreen('s-main');
-    document.getElementById('fab').style.display = 'flex';
-    loadData();
+// มือถือ / แอปที่ติดตั้งบนหน้าจอหลัก → ใช้การ redirect แทน popup (popup มักถูกบล็อกบนมือถือ)
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  || window.matchMedia('(display-mode: standalone)').matches
+  || window.navigator.standalone === true;
+const REDIRECT_URI = location.origin + location.pathname;
+
+function startSession() {
+  showScreen('s-main');
+  document.getElementById('fab').style.display = 'flex';
+  loadData();
+}
+
+// รับ token ที่ Google ส่งกลับมาทาง URL (#access_token=...)
+function handleRedirectReturn() {
+  if (!location.hash.includes('access_token') && !location.hash.includes('error=')) return false;
+  const h = new URLSearchParams(location.hash.slice(1));
+  window.history.replaceState(null, '', REDIRECT_URI);  // ล้าง token ออกจาก URL
+  let expected = null;
+  try { expected = sessionStorage.getItem('at_oauth_state') || localStorage.getItem('at_oauth_state'); } catch (e) {}
+  try { sessionStorage.removeItem('at_oauth_state'); localStorage.removeItem('at_oauth_state'); } catch (e) {}
+  if (h.get('error')) {
+    setTimeout(() => alert('เข้าสู่ระบบไม่สำเร็จ: ' + h.get('error')), 300);
+    return false;
+  }
+  if (expected && h.get('state') !== expected) {
+    setTimeout(() => alert('เข้าสู่ระบบไม่สำเร็จ (state ไม่ตรง) กรุณาลองใหม่'), 300);
+    return false;
+  }
+  accessToken = h.get('access_token');
+  tokenExpiry = Date.now() + ((parseInt(h.get('expires_in')) || 3600) - 120) * 1000;
+  saveToken();
+  return true;
+}
+
+function signInRedirect() {
+  const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  try { sessionStorage.setItem('at_oauth_state', state); localStorage.setItem('at_oauth_state', state); } catch (e) {}
+  const q = new URLSearchParams({
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    response_type: 'token',
+    scope: SCOPES,
+    include_granted_scopes: 'true',
+    state,
   });
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + q.toString();
+}
+
+if (handleRedirectReturn() || restoreToken()) {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startSession);
+  else startSession();
 }
 
 window.addEventListener('load', () => {
@@ -538,13 +583,20 @@ window.addEventListener('load', () => {
         client_id: CLIENT_ID,
         scope: SCOPES,
         callback: onToken,
+        error_callback: (err) => {
+          document.getElementById('signin-btn').disabled = false;
+          // popup เปิดไม่ได้/ถูกปิด → สลับไปใช้ redirect
+          if (err && (err.type === 'popup_failed_to_open' || err.type === 'popup_closed')) signInRedirect();
+          else alert('เข้าสู่ระบบไม่สำเร็จ: ' + (err?.message || err?.type || 'unknown'));
+        },
       });
     }
   }, 100);
 });
 
 function signIn() {
-  if (!tokenClient) { alert('กำลังโหลด Google SDK กรุณารอสักครู่แล้วลองใหม่'); return; }
+  if (IS_MOBILE) { signInRedirect(); return; }
+  if (!tokenClient) { signInRedirect(); return; }
   document.getElementById('signin-btn').disabled = true;
   tokenClient.requestAccessToken({ prompt: '' });
 }
@@ -558,14 +610,19 @@ function onToken(resp) {
   accessToken = resp.access_token;
   tokenExpiry  = Date.now() + (resp.expires_in - 120) * 1000;
   saveToken();
-  showScreen('s-main');
-  document.getElementById('fab').style.display = 'flex';
-  loadData();
+  startSession();
 }
 
 function ensureToken() {
   if (!accessToken || Date.now() > tokenExpiry) {
-    tokenClient.requestAccessToken({ prompt: '' });
+    if (IS_MOBILE || !tokenClient) {
+      // token หมดอายุ → กลับหน้า login ให้กดเข้าใหม่
+      accessToken = null; clearSavedToken(); clearInterval(syncTimer);
+      showScreen('s-login');
+      document.getElementById('fab').style.display = 'none';
+    } else {
+      tokenClient.requestAccessToken({ prompt: '' });
+    }
     return false;
   }
   return true;
@@ -573,7 +630,7 @@ function ensureToken() {
 
 function signOut() {
   if (!confirm('ออกจากระบบ?')) return;
-  if (accessToken) google.accounts.oauth2.revoke(accessToken, () => {});
+  if (accessToken && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(accessToken, () => {});
   accessToken = null;
   clearSavedToken();
   clearInterval(syncTimer);
