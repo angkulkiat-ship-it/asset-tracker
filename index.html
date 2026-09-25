@@ -526,7 +526,8 @@ function restoreToken() {
 const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
   || window.matchMedia('(display-mode: standalone)').matches
   || window.navigator.standalone === true;
-const REDIRECT_URI = location.origin + location.pathname;
+// ต้องตรงกับ Authorized redirect URI ใน Google Cloud เป๊ะ (ตัด index.html ออก, บังคับ / ปิดท้าย)
+const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '').replace(/\/?$/, '/');
 
 function startSession() {
   showScreen('s-main');
