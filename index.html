@@ -6,6 +6,10 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ทรัพย์สิน">
+<meta name="theme-color" content="#0B0A08">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>ทรัพย์สินส่วนตัว</title>
 <link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@400;500;600;700&family=Instrument+Serif&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -503,6 +507,29 @@ function catIcon(cat, size, strokeColor, strokeW) {
 // ================================================================
 //  AUTH
 // ================================================================
+// เก็บ token ไว้ในเครื่อง (อายุ ~1 ชม.) เพื่อไม่ต้อง login ใหม่ทุกครั้งที่สลับแอป
+const TOKEN_KEY = 'at_token';
+function saveToken() {
+  try { localStorage.setItem(TOKEN_KEY, JSON.stringify({ t: accessToken, e: tokenExpiry })); } catch (e) {}
+}
+function clearSavedToken() {
+  try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+}
+function restoreToken() {
+  try {
+    const v = JSON.parse(localStorage.getItem(TOKEN_KEY) || 'null');
+    if (v && v.t && Date.now() < v.e) { accessToken = v.t; tokenExpiry = v.e; return true; }
+  } catch (e) {}
+  return false;
+}
+if (restoreToken()) {
+  document.addEventListener('DOMContentLoaded', () => {
+    showScreen('s-main');
+    document.getElementById('fab').style.display = 'flex';
+    loadData();
+  });
+}
+
 window.addEventListener('load', () => {
   const wait = setInterval(() => {
     if (window.google?.accounts?.oauth2) {
@@ -530,6 +557,7 @@ function onToken(resp) {
   }
   accessToken = resp.access_token;
   tokenExpiry  = Date.now() + (resp.expires_in - 120) * 1000;
+  saveToken();
   showScreen('s-main');
   document.getElementById('fab').style.display = 'flex';
   loadData();
@@ -547,6 +575,7 @@ function signOut() {
   if (!confirm('ออกจากระบบ?')) return;
   if (accessToken) google.accounts.oauth2.revoke(accessToken, () => {});
   accessToken = null;
+  clearSavedToken();
   clearInterval(syncTimer);
   assets = [];
   history = [];
@@ -577,6 +606,13 @@ async function api(path, opts = {}) {
       ...(opts.headers || {}),
     },
   });
+  if (r.status === 401) {
+    accessToken = null; tokenExpiry = 0; clearSavedToken();
+    clearInterval(syncTimer);
+    showScreen('s-login');
+    document.getElementById('fab').style.display = 'none';
+    throw new Error('auth');
+  }
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
     throw new Error(e.error?.message || `HTTP ${r.status}`);
