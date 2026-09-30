@@ -333,6 +333,24 @@ input::placeholder { color: var(--faint); }
   color: var(--danger); font-size: 13px; cursor: pointer;
 }
 </style>
+<script>
+// แก้อาการหน้าจอเล็ก (มือถือใช้ความกว้างแบบเดสก์ท็อป) → บังคับคำนวณ viewport ใหม่
+(function () {
+  function fixViewport() {
+    if (!/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) return;
+    if (document.documentElement.clientWidth <= screen.width * 1.15) return;
+    var m = document.querySelector('meta[name=viewport]');
+    var c = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+    if (m) m.parentNode.removeChild(m);
+    m = document.createElement('meta'); m.name = 'viewport'; m.content = c;
+    document.head.appendChild(m);
+  }
+  fixViewport();
+  window.addEventListener('load', fixViewport);
+  window.addEventListener('pageshow', fixViewport);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) fixViewport(); });
+})();
+</script>
 </head>
 <body>
 
@@ -554,7 +572,9 @@ function handleRedirectReturn() {
   accessToken = h.get('access_token');
   tokenExpiry = Date.now() + ((parseInt(h.get('expires_in')) || 3600) - 120) * 1000;
   saveToken();
-  return true;
+  // โหลดหน้าใหม่แบบสะอาด เพื่อให้มือถือจัดขนาดหน้าจอใหม่ (กันหน้าจอเล็กหลังกลับจาก Google)
+  location.replace(REDIRECT_URI);
+  return 'reload';
 }
 
 function signInRedirect() {
@@ -571,7 +591,8 @@ function signInRedirect() {
   location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + q.toString();
 }
 
-if (handleRedirectReturn() || restoreToken()) {
+const _ret = handleRedirectReturn();
+if (_ret !== 'reload' && (_ret || restoreToken())) {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startSession);
   else startSession();
 }
