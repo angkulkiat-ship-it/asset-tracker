@@ -153,6 +153,7 @@ input::placeholder { color: var(--faint); }
 .trend-badge { font-size: 11.5px; font-weight: 600; font-family: var(--font-mono); border-radius: 999px; padding: 3px 10px; }
 .trend-badge.up   { color: var(--positive); background: rgba(143,191,159,0.1); border: 1px solid rgba(143,191,159,0.3); }
 .trend-badge.down { color: var(--danger);   background: rgba(214,116,105,0.1);  border: 1px solid rgba(214,116,105,0.3); }
+.trend-badge.flat { color: var(--muted);    background: rgba(255,255,255,0.04);  border: 1px solid var(--border); }
 .trend-months { display: flex; justify-content: space-between; margin-top: 6px; font-size: 10.5px; color: var(--faint); font-family: var(--font-mono); }
 
 /* ===== GOAL CARD ===== */
@@ -169,6 +170,37 @@ input::placeholder { color: var(--faint); }
 .goal-track { height: 5px; background: rgba(255,255,255,0.07); border-radius: 3px; overflow: hidden; }
 .goal-fill { height: 100%; background: linear-gradient(90deg, #C79E55, #E2C182); border-radius: 3px; transition: width .4s ease; }
 .goal-remain { margin-top: 8px; font-size: 11px; color: var(--muted); }
+
+/* ===== MONTHLY GROWTH ===== */
+.growth-card {
+  margin-top: 18px; padding: 15px 16px;
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 14px;
+  cursor: pointer; transition: border-color .15s;
+  animation: fadeUp .4s ease .08s both;
+}
+.growth-card:hover { border-color: rgba(216,179,108,0.4); }
+.growth-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
+.growth-label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--text); }
+.growth-more { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
+.growth-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.growth-amt { font-family: var(--font-mono); font-size: 22px; font-weight: 600; letter-spacing: -0.3px; }
+.growth-sub { margin-top: 7px; font-size: 11px; color: var(--muted); line-height: 1.7; }
+.c-up   { color: var(--positive); }
+.c-down { color: var(--danger); }
+.c-flat { color: var(--muted); }
+.mo-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.mo-stat { border: 1px solid var(--hairline); background: rgba(255,255,255,0.015); border-radius: 12px; padding: 11px 12px; }
+.mo-stat .k { font-size: 11px; color: var(--muted); }
+.mo-stat .v { margin-top: 5px; font-family: var(--font-mono); font-size: 14.5px; font-weight: 600; }
+.mo-stat .s { margin-top: 2px; font-family: var(--font-mono); font-size: 11.5px; }
+.mo-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--hairline); }
+.mo-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mo-month { font-size: 13.5px; color: var(--text); }
+.mo-total { font-size: 11.5px; color: var(--muted); font-family: var(--font-mono); }
+.mo-right { text-align: right; flex-shrink: 0; display: flex; flex-direction: column; gap: 3px; }
+.mo-diff { font-size: 13.5px; font-weight: 600; font-family: var(--font-mono); }
+.mo-pct  { font-size: 11px; font-family: var(--font-mono); }
+.mo-note { margin-top: 14px; font-size: 11px; color: var(--faint); line-height: 1.7; }
 
 /* ===== CAT CHIPS ===== */
 .cats-wrap { display: flex; gap: 8px; overflow-x: auto; padding: 18px 0 4px; scrollbar-width: none; }
@@ -458,6 +490,16 @@ input::placeholder { color: var(--faint); }
   </div>
 </div>
 
+<!-- ========== MONTHLY GROWTH SHEET ========== -->
+<div class="sheet-overlay" id="growth-overlay" onclick="overlayClose(event,'growth-overlay')">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">เงินเพิ่มรายเดือน</div>
+    <div id="growth-body"></div>
+    <button class="btn-secondary" style="width:100%;margin-top:18px" onclick="closeSheet('growth-overlay')">ปิด</button>
+  </div>
+</div>
+
 <!-- ========== CHART SHEET ========== -->
 <div class="sheet-overlay" id="chart-overlay" onclick="overlayClose(event,'chart-overlay')">
   <div class="sheet">
@@ -486,6 +528,7 @@ const SPREADSHEET_ID = '1B86lOJ9MXTAsKa_jeRwIkCH2wF-EfXpmpU4p12bqajw';
 
 const SHEET_NAME    = 'ทรัพย์สิน';
 const HISTORY_SHEET = 'ประวัติ';
+const SETTINGS_SHEET = 'ตั้งค่า';
 const SCOPES        = 'https://www.googleapis.com/auth/spreadsheets';
 const BASE_URL      = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}`;
 
@@ -496,10 +539,12 @@ let assets       = [];
 let activeCat    = 'ทั้งหมด';
 let syncTimer    = null;
 let sheetIdCache = null;
-let history      = [];      // [{ key:'2026-07', total: 123456 }]
-let historyReady = false;   // snapshot/ensure done this session
+let history      = [];      // [{ key:'2026-07', total: 123456, row: 3 }]
+let historyReady = false;   // tried to load history this session
+let historyOk    = false;   // history loaded successfully
 let hiddenAmts   = localStorage.getItem('at_hidden') === '1';
 let goal         = parseFloat(localStorage.getItem('at_goal')) || 2000000;
+let goalRow      = null;    // แถวของ goal ในแท็บ "ตั้งค่า"
 
 // ---- CATEGORY META (SVG line icons) ----
 const CATS = {
@@ -659,6 +704,7 @@ function signOut() {
   assets = [];
   history = [];
   historyReady = false;
+  historyOk = false;
   showScreen('s-login');
   document.getElementById('fab').style.display = 'none';
 }
@@ -714,24 +760,37 @@ async function loadData(quiet = false) {
     const resp = await api(`/values/${enc(SHEET_NAME)}!A2:D`);
     const rows = resp.values || [];
 
+    // เก็บเลขแถวจริงก่อนกรองแถวว่าง (กันแก้/ลบผิดแถวเมื่อมีแถวว่างคั่น)
     assets = rows
-      .filter(r => r[0] && r[1])
-      .map((r, i) => ({
-        row:      i + 2,
-        id:       parseInt(r[0]) || i + 1,
+      .map((r, i) => ({ r, row: i + 2 }))
+      .filter(({ r }) => r[0] && r[1])
+      .map(({ r, row }) => ({
+        row,
+        id:       parseInt(r[0]) || row - 1,
         name:     r[1] || '',
-        amount:   parseFloat((r[2] || '0').replace(/,/g, '')) || 0,
+        amount:   parseFloat(String(r[2] || '0').replace(/,/g, '')) || 0,
         category: r[3] || 'อื่นๆ',
       }));
 
-    // history: ensure tab + monthly snapshot (once per session, non-fatal)
+    // history: ensure tab + load (once per session, non-fatal)
     if (!historyReady) {
-      try { await initHistory(); } catch (e) { console.warn('history:', e.message); }
       historyReady = true;
+      try { await initHistory(); historyOk = true; } catch (e) { console.warn('history:', e.message); }
     }
 
     renderAll();
     setSyncState('ok');
+
+    // บันทึกยอดล่าสุดของเดือนนี้ลงแท็บ "ประวัติ" (non-fatal)
+    if (historyOk) {
+      try { await syncHistory(assets.reduce((s, a) => s + a.amount, 0)); }
+      catch (e) { console.warn('history sync:', e.message); }
+      // ดึงเป้าหมายล่าสุด (เผื่อแก้จากอีกเครื่อง)
+      if (quiet) {
+        try { const g0 = goal; await loadSettings(); if (goal !== g0) renderAll(); }
+        catch (e) { console.warn('settings sync:', e.message); }
+      }
+    }
 
     clearInterval(syncTimer);
     syncTimer = setInterval(() => loadData(true), 30000);
@@ -797,34 +856,86 @@ function monthLabel(key) {
   return `${TH_MONTHS[(m - 1) % 12]} ${String((y + 543) % 100).padStart(2, '0')}`;
 }
 
+async function ensureTab(meta, title, header) {
+  if (meta.sheets.some(s => s.properties.title === title)) return;
+  await api(':batchUpdate', {
+    method: 'POST',
+    body: JSON.stringify({ requests: [{ addSheet: { properties: { title } } }] }),
+  });
+  await api(`/values/${enc(title)}!A1:B1?valueInputOption=RAW`, {
+    method: 'PUT',
+    body: JSON.stringify({ values: [header] }),
+  });
+}
+
 async function initHistory() {
-  // ensure tab exists
   const meta = await api('?fields=sheets.properties');
-  if (!meta.sheets.some(s => s.properties.title === HISTORY_SHEET)) {
-    await api(':batchUpdate', {
-      method: 'POST',
-      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: HISTORY_SHEET } } }] }),
-    });
-    await api(`/values/${enc(HISTORY_SHEET)}!A1:B1?valueInputOption=RAW`, {
-      method: 'PUT',
-      body: JSON.stringify({ values: [['เดือน', 'ยอดรวม']] }),
-    });
-  }
-  // load rows
+  await ensureTab(meta, HISTORY_SHEET, ['เดือน', 'ยอดรวม']);
+  try {
+    await ensureTab(meta, SETTINGS_SHEET, ['key', 'value']);
+    await loadSettings();
+  } catch (e) { console.warn('settings:', e.message); }
+
+  // load rows (เก็บเลขแถวจริงไว้สำหรับอัปเดตยอดของเดือนปัจจุบัน)
   const resp = await api(`/values/${enc(HISTORY_SHEET)}!A2:B`);
   history = (resp.values || [])
-    .filter(r => r[0] && /^\d{4}-\d{2}$/.test(r[0]))
-    .map(r => ({ key: r[0], total: parseFloat(String(r[1] || '0').replace(/,/g, '')) || 0 }))
+    .map((r, i) => ({ row: i + 2, key: String(r[0] || '').trim(), total: parseFloat(String(r[1] || '0').replace(/,/g, '')) || 0 }))
+    .filter(h => /^\d{4}-\d{2}$/.test(h.key))
     .sort((a, b) => a.key.localeCompare(b.key));
-  // snapshot ครั้งแรกของเดือน
+}
+
+// ยอดของเดือนปัจจุบัน = ยอดล่าสุดที่เห็นในเดือนนั้น → พอขึ้นเดือนใหม่ เดือนก่อนจะเป็น "ยอดสิ้นเดือน" โดยอัตโนมัติ
+async function syncHistory(total) {
   const key = monthKey(new Date());
-  if (!history.some(h => h.key === key)) {
-    const total = assets.reduce((s, a) => s + a.amount, 0);
-    await api(`/values/${enc(HISTORY_SHEET)}!A:B:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+  const cur = history.find(h => h.key === key);
+  if (cur) {
+    if (!cur.row || Math.round(cur.total) === Math.round(total)) return;
+    await api(`/values/${enc(HISTORY_SHEET)}!B${cur.row}?valueInputOption=RAW`, {
+      method: 'PUT',
+      body: JSON.stringify({ values: [[total]] }),
+    });
+    cur.total = total;
+  } else {
+    const res = await api(`/values/${enc(HISTORY_SHEET)}!A:B:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
       method: 'POST',
       body: JSON.stringify({ values: [[key, total]] }),
     });
-    history.push({ key, total });
+    const m = /!A(\d+)/.exec(res.updates?.updatedRange || '');
+    history.push({ key, total, row: m ? parseInt(m[1]) : null });
+    history.sort((a, b) => a.key.localeCompare(b.key));
+  }
+}
+
+// ================================================================
+//  SETTINGS (แท็บ "ตั้งค่า": เป้าหมาย ซิงค์ข้ามเครื่อง)
+// ================================================================
+async function loadSettings() {
+  const resp = await api(`/values/${enc(SETTINGS_SHEET)}!A2:B`);
+  const rows = resp.values || [];
+  const i = rows.findIndex(r => String(r[0] || '').trim() === 'goal');
+  if (i >= 0) {
+    goalRow = i + 2;
+    const g = parseFloat(String(rows[i][1] || '').replace(/,/g, ''));
+    if (g > 0) { goal = g; localStorage.setItem('at_goal', String(g)); }
+  } else {
+    // ยังไม่มีในชีต → อัปโหลดค่าที่เครื่องนี้ใช้อยู่ขึ้นไป
+    await writeGoal(goal);
+  }
+}
+
+async function writeGoal(g) {
+  if (goalRow) {
+    await api(`/values/${enc(SETTINGS_SHEET)}!A${goalRow}:B${goalRow}?valueInputOption=RAW`, {
+      method: 'PUT',
+      body: JSON.stringify({ values: [['goal', g]] }),
+    });
+  } else {
+    const res = await api(`/values/${enc(SETTINGS_SHEET)}!A:B:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+      method: 'POST',
+      body: JSON.stringify({ values: [['goal', g]] }),
+    });
+    const m = /!A(\d+)/.exec(res.updates?.updatedRange || '');
+    goalRow = m ? parseInt(m[1]) : null;
   }
 }
 
@@ -851,7 +962,7 @@ function renderAll() {
   const visible = activeCat === 'ทั้งหมด' ? assets : assets.filter(a => a.category === activeCat);
   const sorted  = [...visible].sort((a, b) => b.amount - a.amount);
 
-  let html = renderTotal(total) + renderTrend(total) + renderGoal(total) + renderChips();
+  let html = renderTotal(total) + renderTrend(total) + renderGrowth(total) + renderGoal(total) + renderChips();
 
   html += `
     <div class="section-header">
@@ -948,6 +1059,139 @@ function renderTrend(total) {
       <span>${lastLabel}</span>
     </div>
   </div>`;
+}
+
+// ================================================================
+//  MONTHLY GROWTH (เงินเพิ่มรายเดือน: บาท + %)
+// ================================================================
+function monthIndex(key) { const [y, m] = key.split('-').map(Number); return y * 12 + (m - 1); }
+
+function monthSeries(total) {
+  const curKey = monthKey(new Date());
+  const s = history.filter(h => h.key !== curKey).map(h => ({ key: h.key, total: h.total }));
+  s.push({ key: curKey, total });
+  return s.sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function monthChanges(series) {
+  return series.map((m, i) => {
+    if (i === 0) return { ...m, prevKey: null, gap: 0, diff: null, pct: null };
+    const p = series[i - 1];
+    const diff = m.total - p.total;
+    return { ...m, prevKey: p.key, gap: monthIndex(m.key) - monthIndex(p.key), diff, pct: p.total > 0 ? diff / p.total * 100 : null };
+  });
+}
+
+function growthSummary(series) {
+  const first = series[0], last = series[series.length - 1];
+  const n = monthIndex(last.key) - monthIndex(first.key);
+  if (n < 1) return null;
+  const diff = last.total - first.total;
+  return {
+    n, first, diff,
+    pct:    first.total > 0 ? diff / first.total * 100 : null,
+    avg:    diff / n,
+    avgPct: first.total > 0 && last.total > 0 ? (Math.pow(last.total / first.total, 1 / n) - 1) * 100 : null,
+  };
+}
+
+function dirCls(n) { return n > 0.5 ? 'up' : n < -0.5 ? 'down' : 'flat'; }
+function signedMoney(n) {
+  const sign = n < -0.5 ? '−' : '+';
+  return sign + (hiddenAmts ? '฿•••••' : '฿' + fmt(Math.abs(n)));
+}
+function signedPct(p) {
+  if (p == null || !isFinite(p)) return '—';
+  return (p < -0.05 ? '−' : '+') + Math.abs(p).toFixed(1) + '%';
+}
+
+const GROWTH_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D8B36C" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"></path><path d="M15 7h6v6"></path></svg>';
+
+function renderGrowth(total) {
+  const series = monthSeries(total);
+  const ch  = monthChanges(series);
+  const cur = ch[ch.length - 1];
+
+  if (cur.diff == null) {
+    return `
+    <div class="growth-card" onclick="openGrowth()">
+      <div class="growth-head">
+        <div class="growth-label">${GROWTH_ICON}<span>เงินเพิ่มเดือนนี้</span></div>
+      </div>
+      <div class="growth-sub">ยังไม่มีข้อมูลเดือนก่อนหน้า — จะเริ่มเทียบได้ตั้งแต่เดือนหน้า</div>
+    </div>`;
+  }
+
+  const cls  = dirCls(cur.diff);
+  const sum  = growthSummary(series);
+  const cmp  = cur.gap === 1
+    ? `เทียบกับ ${monthLabel(cur.prevKey)}`
+    : `เทียบกับ ${monthLabel(cur.prevKey)} (ห่าง ${cur.gap} เดือน)`;
+  const avg  = sum && sum.n >= 2 ? ` · เฉลี่ย ${signedMoney(sum.avg)}/เดือน` : '';
+
+  return `
+  <div class="growth-card" onclick="openGrowth()">
+    <div class="growth-head">
+      <div class="growth-label">${GROWTH_ICON}<span>${cur.diff < -0.5 ? 'เงินลดลงเดือนนี้' : 'เงินเพิ่มเดือนนี้'}</span></div>
+      <span class="growth-more">รายเดือน ›</span>
+    </div>
+    <div class="growth-main">
+      <span class="growth-amt c-${cls}">${signedMoney(cur.diff)}</span>
+      <span class="trend-badge ${cls}">${signedPct(cur.pct)}</span>
+    </div>
+    <div class="growth-sub">${cmp}${avg}</div>
+  </div>`;
+}
+
+function openGrowth() {
+  const total  = assets.reduce((s, a) => s + a.amount, 0);
+  const series = monthSeries(total);
+  const ch     = monthChanges(series).reverse();   // ล่าสุดอยู่บน
+  const sum    = growthSummary(series);
+  const curKey = monthKey(new Date());
+
+  let html = '';
+  if (sum) {
+    const c1 = dirCls(sum.diff), c2 = dirCls(sum.avg);
+    html += `
+    <div class="mo-summary">
+      <div class="mo-stat">
+        <div class="k">เพิ่มสะสมตั้งแต่ ${monthLabel(sum.first.key)}</div>
+        <div class="v c-${c1}">${signedMoney(sum.diff)}</div>
+        <div class="s c-${c1}">${signedPct(sum.pct)}</div>
+      </div>
+      <div class="mo-stat">
+        <div class="k">เฉลี่ยต่อเดือน (${sum.n} เดือน)</div>
+        <div class="v c-${c2}">${signedMoney(sum.avg)}</div>
+        <div class="s c-${c2}">${signedPct(sum.avgPct)}</div>
+      </div>
+    </div>`;
+  }
+
+  html += ch.map(m => {
+    const label = monthLabel(m.key) + (m.key === curKey ? ' (เดือนนี้)' : '');
+    let right;
+    if (m.diff == null) {
+      right = `<span class="mo-diff c-flat">จุดเริ่มต้น</span>`;
+    } else {
+      const c = dirCls(m.diff);
+      const gapNote = m.gap > 1 ? ` · ${m.gap} เดือน` : '';
+      right = `<span class="mo-diff c-${c}">${signedMoney(m.diff)}</span>
+               <span class="mo-pct c-${c}">${signedPct(m.pct)}${gapNote}</span>`;
+    }
+    return `<div class="mo-row">
+      <div class="mo-left">
+        <span class="mo-month">${label}</span>
+        <span class="mo-total">ยอดรวม ${money(m.total)}</span>
+      </div>
+      <div class="mo-right">${right}</div>
+    </div>`;
+  }).join('');
+
+  html += `<div class="mo-note">ยอดของแต่ละเดือนคือยอดล่าสุดที่บันทึกในเดือนนั้น (แก้ไขย้อนหลังได้ในแท็บ "ประวัติ" ของ Google Sheet)</div>`;
+
+  document.getElementById('growth-body').innerHTML = html;
+  openSheet('growth-overlay');
 }
 
 function renderGoal(total) {
@@ -1107,6 +1351,10 @@ function saveGoal() {
   localStorage.setItem('at_goal', String(g));
   closeSheet('goal-overlay');
   renderAll();
+  setSyncState('syncing');
+  writeGoal(g)
+    .then(() => setSyncState('ok'))
+    .catch(e => { if (e.message !== 'auth') { setSyncState('error'); alert('บันทึกเป้าหมายไป Sheet ไม่สำเร็จ: ' + e.message); } });
 }
 
 // ================================================================
