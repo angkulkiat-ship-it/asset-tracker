@@ -545,6 +545,9 @@ let historyOk    = false;   // history loaded successfully
 let hiddenAmts   = localStorage.getItem('at_hidden') === '1';
 let goal         = parseFloat(localStorage.getItem('at_goal')) || 2000000;
 let goalRow      = null;    // แถวของ goal ในแท็บ "ตั้งค่า"
+let settingRows  = {};      // key → เลขแถวในแท็บ "ตั้งค่า"
+let growthStart  = null;    // 'YYYY-MM-DD' วันที่เริ่มนับเงินเพิ่ม/ลดใหม่ (null = ใช้ประวัติทั้งหมด)
+let growthBase   = 0;       // ยอดรวม ณ วันที่เริ่มนับใหม่
 
 // ---- CATEGORY META (SVG line icons) ----
 const CATS = {
@@ -705,6 +708,7 @@ function signOut() {
   history = [];
   historyReady = false;
   historyOk = false;
+  goalRow = null; settingRows = {}; growthStart = null; growthBase = 0;
   showScreen('s-login');
   document.getElementById('fab').style.display = 'none';
 }
@@ -787,7 +791,7 @@ async function loadData(quiet = false) {
       catch (e) { console.warn('history sync:', e.message); }
       // ดึงเป้าหมายล่าสุด (เผื่อแก้จากอีกเครื่อง)
       if (quiet) {
-        try { const g0 = goal; await loadSettings(); if (goal !== g0) renderAll(); }
+        try { const g0 = goal, s0 = growthStart + '|' + growthBase; await loadSettings(); if (goal !== g0 || growthStart + '|' + growthBase !== s0) renderAll(); }
         catch (e) { console.warn('settings sync:', e.message); }
       }
     }
@@ -912,31 +916,50 @@ async function syncHistory(total) {
 async function loadSettings() {
   const resp = await api(`/values/${enc(SETTINGS_SHEET)}!A2:B`);
   const rows = resp.values || [];
-  const i = rows.findIndex(r => String(r[0] || '').trim() === 'goal');
-  if (i >= 0) {
-    goalRow = i + 2;
-    const g = parseFloat(String(rows[i][1] || '').replace(/,/g, ''));
+  settingRows = {};
+  const vals = {};
+  rows.forEach((r, i) => {
+    const k = String(r[0] || '').trim();
+    if (k && !(k in settingRows)) { settingRows[k] = i + 2; vals[k] = String(r[1] ?? '').trim(); }
+  });
+
+  // เป้าหมาย
+  goalRow = settingRows.goal || null;
+  if (goalRow) {
+    const g = parseFloat(vals.goal.replace(/,/g, ''));
     if (g > 0) { goal = g; localStorage.setItem('at_goal', String(g)); }
   } else {
     // ยังไม่มีในชีต → อัปโหลดค่าที่เครื่องนี้ใช้อยู่ขึ้นไป
     await writeGoal(goal);
   }
+
+  // จุดเริ่มนับเงินเพิ่ม/ลดใหม่
+  const st = vals.growth_start || '';
+  const bs = parseFloat(String(vals.growth_base || '').replace(/,/g, ''));
+  if (/^\d{4}-\d{2}-\d{2}$/.test(st) && isFinite(bs)) { growthStart = st; growthBase = bs; }
+  else { growthStart = null; growthBase = 0; }
 }
 
-async function writeGoal(g) {
-  if (goalRow) {
-    await api(`/values/${enc(SETTINGS_SHEET)}!A${goalRow}:B${goalRow}?valueInputOption=RAW`, {
+async function writeSetting(key, value) {
+  const row = settingRows[key];
+  if (row) {
+    await api(`/values/${enc(SETTINGS_SHEET)}!A${row}:B${row}?valueInputOption=RAW`, {
       method: 'PUT',
-      body: JSON.stringify({ values: [['goal', g]] }),
+      body: JSON.stringify({ values: [[key, value]] }),
     });
   } else {
     const res = await api(`/values/${enc(SETTINGS_SHEET)}!A:B:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
       method: 'POST',
-      body: JSON.stringify({ values: [['goal', g]] }),
+      body: JSON.stringify({ values: [[key, value]] }),
     });
     const m = /!A(\d+)/.exec(res.updates?.updatedRange || '');
-    goalRow = m ? parseInt(m[1]) : null;
+    if (m) settingRows[key] = parseInt(m[1]);
   }
+}
+
+async function writeGoal(g) {
+  await writeSetting('goal', g);
+  goalRow = settingRows.goal || null;
 }
 
 // ================================================================
@@ -1016,11 +1039,10 @@ function renderTotal(total) {
 }
 
 function renderTrend(total) {
-  const curKey = monthKey(new Date());
-  const past = history.filter(h => h.key !== curKey).slice(-11);
-  let series = [...past.map(h => h.total), total];
-  let firstLabel = past.length ? monthLabel(past[0].key) : monthLabel(curKey);
-  const lastLabel = monthLabel(curKey);
+  const ms = monthSeries(total).slice(-12);
+  let series = ms.map(m => m.total);
+  const firstLabel = ms[0].label;
+  const lastLabel = monthLabel(monthKey(new Date()));
   if (series.length === 1) series = [series[0], series[0]];
 
   const min = Math.min(...series), max = Math.max(...series);
@@ -1066,25 +1088,41 @@ function renderTrend(total) {
 // ================================================================
 function monthIndex(key) { const [y, m] = key.split('-').map(Number); return y * 12 + (m - 1); }
 
+function dayKey(d) { return `${monthKey(d)}-${String(d.getDate()).padStart(2, '0')}`; }
+function dayLabel(dk) {
+  const [y, m, d] = dk.split('-').map(Number);
+  return `${d} ${TH_MONTHS[(m - 1) % 12]} ${String((y + 543) % 100).padStart(2, '0')}`;
+}
+
+// ลำดับยอดรวมรายเดือน (ถ้ามีการเริ่มนับใหม่ → ตัดเดือนก่อนหน้าทิ้ง และใช้ยอด ณ วันเริ่มนับเป็นจุดแรก)
 function monthSeries(total) {
   const curKey = monthKey(new Date());
-  const s = history.filter(h => h.key !== curKey).map(h => ({ key: h.key, total: h.total }));
-  s.push({ key: curKey, total });
-  return s.sort((a, b) => a.key.localeCompare(b.key));
+  const startKey = growthStart ? growthStart.slice(0, 7) : null;
+  const s = history
+    .filter(h => h.key !== curKey && (!startKey || h.key >= startKey))
+    .map(h => ({ key: h.key, total: h.total, label: monthLabel(h.key) }));
+  s.push({ key: curKey, total, label: monthLabel(curKey) });
+  s.sort((a, b) => a.key.localeCompare(b.key));
+  if (startKey && startKey <= curKey) {
+    s.unshift({ key: startKey, total: growthBase, label: dayLabel(growthStart), base: true });
+  }
+  return s;
 }
 
 function monthChanges(series) {
   return series.map((m, i) => {
-    if (i === 0) return { ...m, prevKey: null, gap: 0, diff: null, pct: null };
+    if (i === 0) return { ...m, prevKey: null, prevLabel: null, gap: 0, diff: null, pct: null };
     const p = series[i - 1];
     const diff = m.total - p.total;
-    return { ...m, prevKey: p.key, gap: monthIndex(m.key) - monthIndex(p.key), diff, pct: p.total > 0 ? diff / p.total * 100 : null };
+    return { ...m, prevKey: p.key, prevLabel: p.label, prevBase: !!p.base, gap: monthIndex(m.key) - monthIndex(p.key), diff, pct: p.total > 0 ? diff / p.total * 100 : null };
   });
 }
 
 function growthSummary(series) {
   const first = series[0], last = series[series.length - 1];
-  const n = monthIndex(last.key) - monthIndex(first.key);
+  if (series.length < 2) return null;
+  // จุดเริ่มนับใหม่อยู่กลางเดือน → นับเดือนนั้นเป็น 1 เดือน
+  const n = monthIndex(last.key) - monthIndex(first.key) + (first.base ? 1 : 0);
   if (n < 1) return null;
   const diff = last.total - first.total;
   return {
@@ -1124,9 +1162,11 @@ function renderGrowth(total) {
 
   const cls  = dirCls(cur.diff);
   const sum  = growthSummary(series);
-  const cmp  = cur.gap === 1
-    ? `เทียบกับ ${monthLabel(cur.prevKey)}`
-    : `เทียบกับ ${monthLabel(cur.prevKey)} (ห่าง ${cur.gap} เดือน)`;
+  const cmp  = cur.prevBase
+    ? `เทียบกับวันเริ่มนับ ${cur.prevLabel}`
+    : cur.gap === 1
+      ? `เทียบกับ ${cur.prevLabel}`
+      : `เทียบกับ ${cur.prevLabel} (ห่าง ${cur.gap} เดือน)`;
   const avg  = sum && sum.n >= 2 ? ` · เฉลี่ย ${signedMoney(sum.avg)}/เดือน` : '';
 
   return `
@@ -1156,7 +1196,7 @@ function openGrowth() {
     html += `
     <div class="mo-summary">
       <div class="mo-stat">
-        <div class="k">เพิ่มสะสมตั้งแต่ ${monthLabel(sum.first.key)}</div>
+        <div class="k">เพิ่มสะสมตั้งแต่ ${sum.first.label}</div>
         <div class="v c-${c1}">${signedMoney(sum.diff)}</div>
         <div class="s c-${c1}">${signedPct(sum.pct)}</div>
       </div>
@@ -1169,7 +1209,7 @@ function openGrowth() {
   }
 
   html += ch.map(m => {
-    const label = monthLabel(m.key) + (m.key === curKey ? ' (เดือนนี้)' : '');
+    const label = m.base ? `เริ่มนับใหม่ ${m.label}` : m.label + (m.key === curKey ? ' (เดือนนี้)' : '');
     let right;
     if (m.diff == null) {
       right = `<span class="mo-diff c-flat">จุดเริ่มต้น</span>`;
@@ -1188,10 +1228,29 @@ function openGrowth() {
     </div>`;
   }).join('');
 
-  html += `<div class="mo-note">ยอดของแต่ละเดือนคือยอดล่าสุดที่บันทึกในเดือนนั้น (แก้ไขย้อนหลังได้ในแท็บ "ประวัติ" ของ Google Sheet)</div>`;
+  html += `<div class="mo-note">ยอดของแต่ละเดือนคือยอดล่าสุดที่บันทึกในเดือนนั้น (แก้ไขย้อนหลังได้ในแท็บ "ประวัติ" ของ Google Sheet)${growthStart ? `<br>เริ่มนับใหม่เมื่อ ${dayLabel(growthStart)} — ข้อมูลก่อนหน้ายังอยู่ในแท็บ "ประวัติ" (ลบแถว growth_start ในแท็บ "ตั้งค่า" เพื่อกลับไปใช้ประวัติทั้งหมด)` : ''}</div>`;
+  html += `<button class="btn-danger" style="margin-top:16px" onclick="resetGrowth()">เริ่มนับใหม่จากวันนี้</button>`;
 
   document.getElementById('growth-body').innerHTML = html;
   openSheet('growth-overlay');
+}
+
+async function resetGrowth() {
+  if (!historyOk) { alert('ยังโหลดข้อมูลประวัติไม่สำเร็จ ลองใหม่อีกครั้ง'); return; }
+  const total = assets.reduce((s, a) => s + a.amount, 0);
+  const today = dayKey(new Date());
+  if (!confirm(`เริ่มนับเงินเพิ่ม/ลดใหม่ตั้งแต่วันนี้ (${dayLabel(today)})?\n\nยอดรวมตอนนี้ ${hiddenAmts ? '' : '฿' + fmt(total) + ' '}จะเป็นจุดเริ่มต้น ข้อมูลเดือนก่อนหน้าจะไม่ถูกนำมาคิด (แต่ยังเก็บไว้ในแท็บ "ประวัติ")`)) return;
+  setSyncState('syncing');
+  try {
+    await writeSetting('growth_base', total);
+    await writeSetting('growth_start', today);
+    growthStart = today; growthBase = total;
+    setSyncState('ok');
+    renderAll();
+    openGrowth();
+  } catch (e) {
+    if (e.message !== 'auth') { setSyncState('error'); alert('บันทึกไป Sheet ไม่สำเร็จ: ' + e.message); }
+  }
 }
 
 function renderGoal(total) {
